@@ -38,7 +38,13 @@ class MockModelServerClient(ModelServerClient):
         self.tokenizer = None
 
     async def process_request(
-        self, data: InferenceAPIData, stage_id: int, scheduled_time: float, lora_adapter: Optional[str] = None
+        self,
+        data: InferenceAPIData,
+        stage_id: int,
+        scheduled_time: float,
+        lora_adapter: Optional[str] = None,
+        extra_headers: Optional[dict[str, str]] = None,
+        program_id: Optional[str] = None,
     ) -> None:
         start = time.perf_counter()
         logger.debug("Processing mock request for stage %d", stage_id)
@@ -63,6 +69,7 @@ class MockModelServerClient(ModelServerClient):
                         start_time=start,
                         end_time=time.perf_counter(),
                         scheduled_time=scheduled_time,
+                        program_id=program_id,
                     )
                 )
         except asyncio.exceptions.TimeoutError as e:
@@ -83,6 +90,7 @@ class MockModelServerClient(ModelServerClient):
                     start_time=start,
                     end_time=time.perf_counter(),
                     scheduled_time=scheduled_time,
+                    program_id=program_id,
                 )
             )
 

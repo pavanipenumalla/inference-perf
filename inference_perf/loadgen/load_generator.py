@@ -64,12 +64,13 @@ import signal
 
 logger = logging.getLogger(__name__)
 
-
 class RequestQueueData(NamedTuple):
     stage_id: int
     request_data: Union[InferenceAPIData, int]
     request_time: float
-    lora_adapter: Optional[str]
+    lora_adapter: Optional[str] = None
+    extra_headers: Optional[dict[str, str]] = None
+    program_id: Optional[str] = None
 
 
 class Worker(mp.Process):
@@ -162,6 +163,8 @@ class Worker(mp.Process):
                     stage_id: int,
                     semaphore: Semaphore,
                     lora_adapter: Optional[str],
+                    extra_headers: Optional[dict[str, str]] = None,
+                    program_id: Optional[str] = None,
                 ) -> None:
                     inflight = False
                     try:
@@ -172,7 +175,10 @@ class Worker(mp.Process):
                         with self.active_requests_counter.get_lock():
                             self.active_requests_counter.value += 1
                             inflight = True
-                        await self.client.process_request(request_data, stage_id, request_time, lora_adapter)
+                        await self.client.process_request(
+                            request_data, stage_id, request_time, lora_adapter,
+                            extra_headers=extra_headers, program_id=program_id,
+                        )
                     except CancelledError:
                         pass
                     finally:
@@ -184,10 +190,13 @@ class Worker(mp.Process):
                         queue.task_done()
                         semaphore.release()
 
-                stage_id, request, request_time, lora_adapter = item
+                stage_id, request, request_time, lora_adapter, extra_headers, program_id = item
                 request_data = LazyLoadDataMixin.get_request(self.datagen, request)
                 task = create_task(
-                    schedule_client(self.request_queue, request_data, request_time, stage_id, semaphore, lora_adapter)
+                    schedule_client(
+                        self.request_queue, request_data, request_time, stage_id, semaphore, lora_adapter,
+                        extra_headers=extra_headers, program_id=program_id,
+                    )
                 )
                 tasks.append(task)
                 await sleep(0)

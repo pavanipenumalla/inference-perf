@@ -45,6 +45,7 @@ class RequestLifecycleMetric(BaseModel):
 
     ttft_slo_sec: Optional[float] = None
     tpot_slo_sec: Optional[float] = None
+    program_id: Optional[str] = None
 
 
 class InferenceAPIData(BaseModel):

@@ -12,10 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from argparse import ArgumentParser
+from inference_perf.client.metricsclient.prometheus_client.google_managed_prometheus_client import GoogleManagedPrometheusMetricsClient
+from inference_perf.client.metricsclient.prometheus_client.base import PrometheusMetricsClient
 from inference_perf.analysis.analyze import analyze_reports
-from typing import List, Optional
+from typing import List, Optional, Union
 from inference_perf.client.modelserver.tgi_client import TGImodelServerClient
 from inference_perf.loadgen import LoadGenerator
+from inference_perf.loadgen.multi_program_runner import MultiProgramLoadGenerator
 from inference_perf.config import (
     DataGenType,
     LoadType,
@@ -68,7 +71,7 @@ class InferencePerfRunner:
     def __init__(
         self,
         client: ModelServerClient,
-        loadgen: LoadGenerator,
+        loadgen: Union[LoadGenerator, MultiProgramLoadGenerator],
         reportgen: ReportGenerator,
         storage_clients: List[StorageClient],
     ) -> None:
@@ -101,8 +104,7 @@ def main_cli() -> None:
     # Parse command line arguments
     parser = ArgumentParser()
     parser.add_argument("-c", "--config_file", help="Config File", required=False)
-    parser.add_argument("-a", "--analyze", nargs="*", help="Path to a report directories to analyze", required=False)
-    parser.add_argument("-u", "--unified_analysis_dir", help="Unified analysis directory path", required=False)
+    parser.add_argument("-a", "--analyze", nargs="*", help="Path to a report directory to analyze.", required=False)
     parser.add_argument(
         "--log-level", help="Logging level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
     )
@@ -111,7 +113,7 @@ def main_cli() -> None:
     setup_logging(args.log_level)
 
     if args.analyze and len(args.analyze) > 0:
-        analyze_reports(args.analyze, args.unified_analysis_dir)
+        analyze_reports(args.analyze)
         return
 
     if not args.config_file:
@@ -230,9 +232,7 @@ def main_cli() -> None:
                 api_config=config.api,
                 timeout=config.load.request_timeout,
             )
-            # Don't overwrite tokenizer if mock client doesn't provide one
-            if model_server_client.tokenizer is not None:
-                tokenizer = model_server_client.tokenizer
+            tokenizer = model_server_client.tokenizer
     else:
         raise Exception("model server client config missing")
 
@@ -241,79 +241,99 @@ def main_cli() -> None:
     if config.load is None:
         raise Exception("load config missing")
 
-    if len(config.load.stages) == 0 and config.load.sweep is None:
+    if config.load.type != LoadType.MULTI_PROGRAM and len(config.load.stages) == 0 and config.load.sweep is None:
         raise Exception("Load stages must be configured, or sweep must be configured")
 
-    # Define DataGenerator
-    datagen: DataGenerator
-    if config.data:
-        # Common checks for generators that require a tokenizer / distribution
-        if config.data.type in set(
-            {
-                DataGenType.ShareGPT,
-                DataGenType.Synthetic,
-                DataGenType.Random,
-                DataGenType.CNNDailyMail,
-                DataGenType.InfinityInstruct,
-                DataGenType.BillsumConversations,
-            }
-        ):
-            if tokenizer is None:
-                raise Exception(
-                    f"{config.data.type.value} data generator requires a configured tokenizer. "
-                    "Please ensure a valid tokenizer is configured in the 'tokenizer' section of your config file."
-                )
+    # Define LoadGenerator (and DataGenerator for non-multi-program modes)
+    loadgen: Union[LoadGenerator, MultiProgramLoadGenerator]
 
-        if config.data.type in [DataGenType.Synthetic, DataGenType.Random]:
-            if config.data.trace is None:
-                if config.data.input_distribution is None:
-                    raise Exception(
-                        f"{config.data.type.value} data generator requires 'input_distribution' to be configured if no trace config is provided"
-                    )
-                if config.data.output_distribution is None:
-                    raise Exception(
-                        f"{config.data.type.value} data generator requires 'output_distribution' to be configured if no trace config is provided"
-                    )
-
-                # Calculate total count based on stage type
-                max_requests = 0
-                for stage in config.load.stages:
-                    if isinstance(stage, StandardLoadStage):
-                        max_requests = max(max_requests, int(stage.rate * stage.duration))
-                    elif isinstance(stage, ConcurrentLoadStage):
-                        max_requests = max(max_requests, stage.num_requests)
-                total_count = max_requests + 1
-                if config.data.input_distribution.total_count is None:
-                    config.data.input_distribution.total_count = total_count
-                if config.data.output_distribution.total_count is None:
-                    config.data.output_distribution.total_count = total_count
-
-        if config.data.type == DataGenType.SharedPrefix and config.data.shared_prefix is None:
-            raise Exception(f"{config.data.type.value} data generator requires 'shared_prefix' to be configured")
-
-        if config.data.type == DataGenType.ShareGPT:
-            datagen = HFShareGPTDataGenerator(config.api, config.data, tokenizer)
-        elif config.data.type == DataGenType.CNNDailyMail:
-            datagen = CNNDailyMailDataGenerator(config.api, config.data, tokenizer)
-        elif config.data.type == DataGenType.Synthetic:
-            datagen = SyntheticDataGenerator(config.api, config.data, tokenizer)
-        elif config.data.type == DataGenType.Random:
-            datagen = RandomDataGenerator(config.api, config.data, tokenizer)
-        elif config.data.type == DataGenType.SharedPrefix:
-            datagen = SharedPrefixDataGenerator(config.api, config.data, tokenizer)
-        elif config.data.type == DataGenType.InfinityInstruct:
-            datagen = InfinityInstructDataGenerator(config.api, config.data, tokenizer)
-        elif config.data.type == DataGenType.BillsumConversations:
-            datagen = BillsumConversationsDataGenerator(config.api, config.data, tokenizer)
-        else:
-            datagen = MockDataGenerator(config.api, config.data, tokenizer)
+    if config.load.type == LoadType.MULTI_PROGRAM:
+        # Multi-program mode: datagen is created per-program inside the runner
+        if not config.load.programs:
+            raise Exception("Multi-program load type requires 'programs' to be configured")
+        if tokenizer is None:
+            raise Exception(
+                "Multi-program load type requires a configured tokenizer. "
+                "Please ensure a valid tokenizer is configured in the 'tokenizer' section of your config file."
+            )
+        loadgen = MultiProgramLoadGenerator(
+            programs=config.load.programs,
+            api_config=config.api,
+            fairness_config=config.load.fairness,
+            load_config=config.load,
+            tokenizer=tokenizer,
+        )
     else:
-        raise Exception("data config missing")
+        # Standard mode: create datagen + LoadGenerator
+        datagen: DataGenerator
+        if config.data:
+            # Common checks for generators that require a tokenizer / distribution
+            if config.data.type in set(
+                {
+                    DataGenType.ShareGPT,
+                    DataGenType.Synthetic,
+                    DataGenType.Random,
+                    DataGenType.CNNDailyMail,
+                    DataGenType.InfinityInstruct,
+                    DataGenType.BillsumConversations,
+                }
+            ):
+                if tokenizer is None:
+                    raise Exception(
+                        f"{config.data.type.value} data generator requires a configured tokenizer. "
+                        "Please ensure a valid tokenizer is configured in the 'tokenizer' section of your config file."
+                    )
 
-    # Define LoadGenerator
-    if isinstance(metrics_client, PrometheusMetricsClient) and config.report.prometheus and config.report.prometheus.per_stage:
-        config.load.interval = max(config.load.interval, metrics_client.scrape_interval)
-    loadgen = LoadGenerator(datagen, config.load)
+            if config.data.type in [DataGenType.Synthetic, DataGenType.Random]:
+                if config.data.trace is None:
+                    if config.data.input_distribution is None:
+                        raise Exception(
+                            f"{config.data.type.value} data generator requires 'input_distribution' to be configured if no trace config is provided"
+                        )
+                    if config.data.output_distribution is None:
+                        raise Exception(
+                            f"{config.data.type.value} data generator requires 'output_distribution' to be configured if no trace config is provided"
+                        )
+
+                    # Calculate total count based on stage type
+                    max_requests = 0
+                    for stage in config.load.stages:
+                        if isinstance(stage, StandardLoadStage):
+                            max_requests = max(max_requests, int(stage.rate * stage.duration))
+                        elif isinstance(stage, ConcurrentLoadStage):
+                            max_requests = max(max_requests, stage.num_requests)
+                    total_count = max_requests + 1
+                    if config.data.input_distribution.total_count is None:
+                        config.data.input_distribution.total_count = total_count
+                    if config.data.output_distribution.total_count is None:
+                        config.data.output_distribution.total_count = total_count
+
+            if config.data.type == DataGenType.SharedPrefix and config.data.shared_prefix is None:
+                raise Exception(f"{config.data.type.value} data generator requires 'shared_prefix' to be configured")
+
+            if config.data.type == DataGenType.ShareGPT:
+                datagen = HFShareGPTDataGenerator(config.api, config.data, tokenizer)
+            elif config.data.type == DataGenType.CNNDailyMail:
+                datagen = CNNDailyMailDataGenerator(config.api, config.data, tokenizer)
+            elif config.data.type == DataGenType.Synthetic:
+                datagen = SyntheticDataGenerator(config.api, config.data, tokenizer)
+            elif config.data.type == DataGenType.Random:
+                datagen = RandomDataGenerator(config.api, config.data, tokenizer)
+            elif config.data.type == DataGenType.SharedPrefix:
+                datagen = SharedPrefixDataGenerator(config.api, config.data, tokenizer)
+            elif config.data.type == DataGenType.InfinityInstruct:
+                datagen = InfinityInstructDataGenerator(config.api, config.data, tokenizer)
+            elif config.data.type == DataGenType.BillsumConversations:
+                datagen = BillsumConversationsDataGenerator(config.api, config.data, tokenizer)
+            else:
+                datagen = MockDataGenerator(config.api, config.data, tokenizer)
+        else:
+            raise Exception("data config missing")
+
+        # Define LoadGenerator
+        if isinstance(metrics_client, PrometheusMetricsClient) and config.report.prometheus and config.report.prometheus.per_stage:
+            config.load.interval = max(config.load.interval, metrics_client.scrape_interval)
+        loadgen = LoadGenerator(datagen, config.load)
 
     # Setup Perf Test Runner
     perfrunner = InferencePerfRunner(model_server_client, loadgen, reportgen, storage_clients)

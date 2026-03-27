@@ -94,7 +94,13 @@ class openAIModelServerClient(ModelServerClient):
         return openAIModelServerClientSession(self)
 
     async def process_request(
-        self, data: InferenceAPIData, stage_id: int, scheduled_time: float, lora_adapter: Optional[str] = None
+        self,
+        data: InferenceAPIData,
+        stage_id: int,
+        scheduled_time: float,
+        lora_adapter: Optional[str] = None,
+        extra_headers: Optional[dict[str, str]] = None,
+        program_id: Optional[str] = None,
     ) -> None:
         """
         Create an internal client session if not already, then use that to
@@ -106,7 +112,10 @@ class openAIModelServerClient(ModelServerClient):
             if self._session is None:
                 self._session = openAIModelServerClientSession(self)
             session = self._session
-        await session.process_request(data, stage_id, scheduled_time, lora_adapter)
+        await session.process_request(
+            data, stage_id, scheduled_time, lora_adapter,
+            extra_headers=extra_headers, program_id=program_id,
+        )
 
     async def close(self) -> None:
         """Close the internal session created by process_request, if any."""
@@ -150,7 +159,13 @@ class openAIModelServerClientSession(ModelServerClientSession):
         self.session = aiohttp.ClientSession(timeout=timeout, connector=connector)
 
     async def process_request(
-        self, data: InferenceAPIData, stage_id: int, scheduled_time: float, lora_adapter: Optional[str] = None
+        self,
+        data: InferenceAPIData,
+        stage_id: int,
+        scheduled_time: float,
+        lora_adapter: Optional[str] = None,
+        extra_headers: Optional[dict[str, str]] = None,
+        program_id: Optional[str] = None,
     ) -> None:
         # Compute effective model name: use LoRA adapter if provided, otherwise use client's model name
         effective_model_name = lora_adapter if lora_adapter else self.client.model_name
@@ -160,11 +175,6 @@ class openAIModelServerClientSession(ModelServerClientSession):
             ignore_eos=self.client.ignore_eos,
             streaming=self.client.api_config.streaming,
         )
-
-        # Add response_format for structured output if configured
-        if self.client.api_config.response_format:
-            payload["response_format"] = self.client.api_config.response_format.to_api_format()
-
         headers = {"Content-Type": "application/json"}
 
         if self.client.api_key:
@@ -172,6 +182,9 @@ class openAIModelServerClientSession(ModelServerClientSession):
 
         if self.client.api_config.headers:
             headers.update(self.client.api_config.headers)
+
+        if extra_headers:
+            headers.update(extra_headers)
 
         request_data = json.dumps(payload)
 
@@ -239,6 +252,7 @@ class openAIModelServerClientSession(ModelServerClientSession):
             start_time=start,
             end_time=end_time,
             scheduled_time=scheduled_time,
+            program_id=program_id,
         )
 
         # Grab TTFT and TPOT thresholds from request headers if available for streaming requests with token-level timestamps

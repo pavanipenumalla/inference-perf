@@ -167,7 +167,13 @@ class ModelServerClient(ABC):
 
     @abstractmethod
     async def process_request(
-        self, data: InferenceAPIData, stage_id: int, scheduled_time: float, lora_adapter: Optional[str] = None
+        self,
+        data: InferenceAPIData,
+        stage_id: int,
+        scheduled_time: float,
+        lora_adapter: Optional[str] = None,
+        extra_headers: Optional[dict[str, str]] = None,
+        program_id: Optional[str] = None,
     ) -> None:
         raise NotImplementedError
 
@@ -182,9 +188,18 @@ class ModelServerClientSession:
         self.client = client
 
     async def process_request(
-        self, data: InferenceAPIData, stage_id: int, scheduled_time: float, lora_adapter: Optional[str] = None
+        self,
+        data: InferenceAPIData,
+        stage_id: int,
+        scheduled_time: float,
+        lora_adapter: Optional[str] = None,
+        extra_headers: Optional[dict[str, str]] = None,
+        program_id: Optional[str] = None,
     ) -> None:
-        await self.client.process_request(data, stage_id, scheduled_time, lora_adapter)
+        await self.client.process_request(
+            data, stage_id, scheduled_time, lora_adapter,
+            extra_headers=extra_headers, program_id=program_id,
+        )
 
     async def close(self) -> None:  # noqa - subclasses optionally override this
         pass

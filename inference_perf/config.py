@@ -29,35 +29,6 @@ class APIType(Enum):
     Chat = "chat"
 
 
-class ResponseFormatType(Enum):
-    JSON_SCHEMA = "json_schema"
-    JSON_OBJECT = "json_object"
-
-
-class ResponseFormat(BaseModel):
-    """Configuration for structured output via response_format parameter.
-
-    See vLLM docs: https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html
-    """
-
-    type: ResponseFormatType = ResponseFormatType.JSON_SCHEMA
-    name: str = "structured_output"  # Name for the json_schema
-    json_schema: Optional[dict[str, Any]] = None
-
-    def to_api_format(self) -> dict[str, Any]:
-        """Convert to the format expected by vLLM/OpenAI API."""
-        if self.type == ResponseFormatType.JSON_OBJECT:
-            return {"type": "json_object"}
-        # json_schema type
-        return {
-            "type": "json_schema",
-            "json_schema": {
-                "name": self.name,
-                "schema": self.json_schema,
-            },
-        }
-
-
 class APIConfig(BaseModel):
     type: APIType = APIType.Completion
     streaming: bool = False
@@ -65,7 +36,6 @@ class APIConfig(BaseModel):
     slo_unit: Optional[str] = None
     slo_tpot_header: Optional[str] = None
     slo_ttft_header: Optional[str] = None
-    response_format: Optional[ResponseFormat] = None
 
 
 class TraceFormat(Enum):
@@ -148,6 +118,7 @@ class LoadType(Enum):
     POISSON = "poisson"
     TRACE_REPLAY = "trace_replay"
     CONCURRENT = "concurrent"
+    MULTI_PROGRAM = "multi_program"
 
 
 class MetricsClientType(Enum):
@@ -216,6 +187,25 @@ class MultiLoRAConfig(BaseModel):
     split: float
 
 
+class ProgramConfig(BaseModel):
+    """Configuration for a single program (tenant) in multi-program load generation."""
+
+    name: str
+    total_requests: int = Field(..., gt=0, description="Total number of requests to send")
+    concurrency: int = Field(..., gt=0, description="Max concurrent in-flight requests")
+    prompt_tokens: int = Field(..., gt=0, description="Number of prompt tokens per request")
+    max_tokens: int = Field(..., gt=0, description="Max output tokens per request")
+    start_time: float = Field(0.0, ge=0, description="Seconds offset from test start")
+    request_timeout: Optional[float] = None
+    no_fairness_header: bool = False
+
+
+class FairnessConfig(BaseModel):
+    """Configuration for fairness header injection."""
+
+    header_key: str = "x-gateway-inference-fairness-id"
+
+
 class LoadConfig(BaseModel):
     type: LoadType = LoadType.CONSTANT
     interval: float = 1.0
@@ -229,12 +219,27 @@ class LoadConfig(BaseModel):
     request_timeout: Optional[float] = None
     lora_traffic_split: Optional[List[MultiLoRAConfig]] = None
     base_seed: int = Field(default_factory=lambda: int(time.time() * 1000))
+    programs: Optional[List[ProgramConfig]] = None
+    fairness: Optional[FairnessConfig] = None
 
     @model_validator(mode="after")
     def validate_load_config(self) -> "LoadConfig":
         # Validate that sweep is not used with concurrent load type
         if self.type == LoadType.CONCURRENT and self.sweep is not None:
             raise ValueError("Cannot have sweep config with CONCURRENT load type")
+
+        # Multi-program validation
+        if self.type == LoadType.MULTI_PROGRAM:
+            if not self.programs:
+                raise ValueError("MULTI_PROGRAM load type requires 'programs' to be configured")
+            names = [p.name for p in self.programs]
+            if len(names) != len(set(names)):
+                raise ValueError("Program names must be unique")
+            return self
+
+        # Non-multi-program should not have programs
+        if self.programs is not None:
+            raise ValueError("'programs' should only be set for MULTI_PROGRAM load type")
 
         # Validate stage types match load type
         if self.type == LoadType.CONCURRENT:
@@ -367,7 +372,10 @@ def read_config(config_file: str) -> Config:
         load_type = merged_cfg["load"].get("type", "constant")
         stages = merged_cfg["load"]["stages"]
 
-        if load_type == "concurrent":
+        if load_type == "multi_program":
+            # Multi-program does not use stages; skip conversion
+            pass
+        elif load_type == "concurrent":
             # Convert to ConcurrentLoadStage objects
             concurrent_stages = []
             for stage in stages:

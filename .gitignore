@@ -177,3 +177,8 @@ cython_debug/
 
 # Test Reports (directories)
 reports-*/
+
+# Local configs with secrets
+config_local*.yml
+inf-perf-env/
+docs/llm-d-loadgen-integration.md
