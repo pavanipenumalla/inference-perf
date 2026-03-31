@@ -1,0 +1,51 @@
+load:
+  type: multi_program
+  fairness:
+    header_key: "x-gateway-inference-fairness-id"
+  programs:
+    - name: "fg-heavy-aggressive-000"
+      total_requests: 10
+      concurrency: 5
+      prompt_tokens: 256
+      max_tokens: 64
+      start_time: 0
+
+    - name: "fg-light-polite-001"
+      total_requests: 10
+      concurrency: 2
+      prompt_tokens: 64
+      max_tokens: 32
+      start_time: 0
+
+    - name: "fg-anonymous-002"
+      total_requests: 5
+      concurrency: 2
+      prompt_tokens: 128
+      max_tokens: 32
+      start_time: 3.0
+      no_fairness_header: true
+
+api:
+  type: completion
+  streaming: true
+
+server:
+  type: vllm
+  model_name: meta-llama/Llama-3.1-8B-Instruct
+  base_url: http://localhost:30080
+  ignore_eos: true
+
+tokenizer:
+  pretrained_model_name_or_path: meta-llama/Llama-3.1-8B-Instruct
+
+metrics:
+  type: prometheus
+  prometheus:
+    url: http://localhost:9090
+    scrape_interval: 1
+
+report:
+  request_lifecycle:
+    summary: true
+    per_stage: true
+    per_request: false
