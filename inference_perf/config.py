@@ -119,6 +119,7 @@ class LoadType(Enum):
     TRACE_REPLAY = "trace_replay"
     CONCURRENT = "concurrent"
     MULTI_PROGRAM = "multi_program"
+    AGENTIC_TRACE = "agentic_trace"
 
 
 class MetricsClientType(Enum):
@@ -206,6 +207,16 @@ class FairnessConfig(BaseModel):
     header_key: str = "x-gateway-inference-fairness-id"
 
 
+class AgenticTraceConfig(BaseModel):
+    """Configuration for agentic trace replay load generation."""
+
+    trace_file: str = Field(..., description="Path to JSON trace file")
+    arrival_rate: float = Field(..., gt=0, description="Programs per second")
+    total_programs: int = Field(..., gt=0, description="Total programs to replay")
+    max_concurrency: int = Field(64, gt=0, description="Max in-flight LLM requests globally")
+    content_mode: str = Field("original", description="'original' or 'synthetic'")
+
+
 class LoadConfig(BaseModel):
     type: LoadType = LoadType.CONSTANT
     interval: float = 1.0
@@ -221,6 +232,7 @@ class LoadConfig(BaseModel):
     base_seed: int = Field(default_factory=lambda: int(time.time() * 1000))
     programs: Optional[List[ProgramConfig]] = None
     fairness: Optional[FairnessConfig] = None
+    agentic_trace: Optional[AgenticTraceConfig] = None
 
     @model_validator(mode="after")
     def validate_load_config(self) -> "LoadConfig":
@@ -237,9 +249,19 @@ class LoadConfig(BaseModel):
                 raise ValueError("Program names must be unique")
             return self
 
+        # Agentic trace validation
+        if self.type == LoadType.AGENTIC_TRACE:
+            if not self.agentic_trace:
+                raise ValueError("AGENTIC_TRACE load type requires 'agentic_trace' to be configured")
+            return self
+
         # Non-multi-program should not have programs
         if self.programs is not None:
             raise ValueError("'programs' should only be set for MULTI_PROGRAM load type")
+
+        # Non-agentic-trace should not have agentic_trace
+        if self.agentic_trace is not None:
+            raise ValueError("'agentic_trace' should only be set for AGENTIC_TRACE load type")
 
         # Validate stage types match load type
         if self.type == LoadType.CONCURRENT:
@@ -374,6 +396,9 @@ def read_config(config_file: str) -> Config:
 
         if load_type == "multi_program":
             # Multi-program does not use stages; skip conversion
+            pass
+        elif load_type == "agentic_trace":
+            # Agentic trace does not use stages; skip conversion
             pass
         elif load_type == "concurrent":
             # Convert to ConcurrentLoadStage objects

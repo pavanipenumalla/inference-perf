@@ -19,6 +19,7 @@ from typing import List, Optional, Union
 from inference_perf.client.modelserver.tgi_client import TGImodelServerClient
 from inference_perf.loadgen import LoadGenerator
 from inference_perf.loadgen.multi_program_runner import MultiProgramLoadGenerator
+from inference_perf.loadgen.agentic_trace_runner import AgenticTraceLoadGenerator
 from inference_perf.config import (
     DataGenType,
     LoadType,
@@ -71,7 +72,7 @@ class InferencePerfRunner:
     def __init__(
         self,
         client: ModelServerClient,
-        loadgen: Union[LoadGenerator, MultiProgramLoadGenerator],
+        loadgen: Union[LoadGenerator, MultiProgramLoadGenerator, AgenticTraceLoadGenerator],
         reportgen: ReportGenerator,
         storage_clients: List[StorageClient],
     ) -> None:
@@ -241,13 +242,21 @@ def main_cli() -> None:
     if config.load is None:
         raise Exception("load config missing")
 
-    if config.load.type != LoadType.MULTI_PROGRAM and len(config.load.stages) == 0 and config.load.sweep is None:
+    if config.load.type not in (LoadType.MULTI_PROGRAM, LoadType.AGENTIC_TRACE) and len(config.load.stages) == 0 and config.load.sweep is None:
         raise Exception("Load stages must be configured, or sweep must be configured")
 
     # Define LoadGenerator (and DataGenerator for non-multi-program modes)
-    loadgen: Union[LoadGenerator, MultiProgramLoadGenerator]
+    loadgen: Union[LoadGenerator, MultiProgramLoadGenerator, AgenticTraceLoadGenerator]
 
-    if config.load.type == LoadType.MULTI_PROGRAM:
+    if config.load.type == LoadType.AGENTIC_TRACE:
+        if not config.load.agentic_trace:
+            raise Exception("Agentic trace load type requires 'agentic_trace' to be configured")
+        loadgen = AgenticTraceLoadGenerator(
+            config=config.load.agentic_trace,
+            client=model_server_client,
+            fairness_config=config.load.fairness,
+        )
+    elif config.load.type == LoadType.MULTI_PROGRAM:
         # Multi-program mode: datagen is created per-program inside the runner
         if not config.load.programs:
             raise Exception("Multi-program load type requires 'programs' to be configured")

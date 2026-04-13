@@ -1,0 +1,24 @@
+api:
+  type: chat
+  streaming: true
+
+server:
+  type: vllm
+  model_name: meta-llama/Llama-3.1-8B-Instruct
+  base_url: http://localhost:30080
+  ignore_eos: true
+
+load:
+  type: agentic_trace
+  fairness:
+    header_key: "x-gateway-inference-fairness-id"
+  agentic_trace:
+    trace_file: "/Users/pavanipenumalla/Desktop/agentix-frontend-c/agentix/simulator/traces/hotpotlats_trace.json"
+    arrival_rate: 1.0
+    total_programs: 3
+    max_concurrency: 50
+    content_mode: "original"
+
+storage:
+  local_storage:
+    path: "reports-agentic-trace"
