@@ -76,6 +76,7 @@ class AgenticTraceLoadGenerator:
         program_id: str,
         stage_id: int,
         pending_parents: Dict[int, int],
+        scheduled_time: float = 0.0,
     ) -> None:
         """Execute a single call in the DAG, then signal children.
 
@@ -104,7 +105,6 @@ class AgenticTraceLoadGenerator:
                     messages=[ChatMessage(role="user", content=content)],
                     max_tokens=call.decode_tokens or 128,
                 )
-                scheduled_time = time.perf_counter()
                 extra_headers: Optional[dict[str, str]] = None
                 if self.fairness_config:
                     extra_headers = {self.fairness_config.header_key: program_id}
@@ -140,8 +140,11 @@ class AgenticTraceLoadGenerator:
             if delay_s > 0:
                 await asyncio.sleep(delay_s)
 
-        # Decrement pending_parents for each child, fire those that are ready
+        # Decrement pending_parents for each child, fire those that are ready.
+        # Capture scheduled_time now — the moment the child becomes runnable —
+        # so schedule_delay reflects real queuing/semaphore wait.
         ready_children = []
+        child_scheduled_time = time.perf_counter()
         for child in call.children:
             child_key = id(child)
             pending_parents[child_key] -= 1
@@ -151,7 +154,10 @@ class AgenticTraceLoadGenerator:
         if ready_children:
             await asyncio.gather(
                 *(
-                    self._execute_call(child, client, semaphore, program_id, stage_id, pending_parents)
+                    self._execute_call(
+                        child, client, semaphore, program_id, stage_id,
+                        pending_parents, scheduled_time=child_scheduled_time,
+                    )
                     for child in ready_children
                 )
             )
@@ -183,7 +189,11 @@ class AgenticTraceLoadGenerator:
             pending_parents[id(call)] = call.parent_count
 
         start_time_epoch = time.time()
-        await self._execute_call(program.root, client, semaphore, program_id, stage_id, pending_parents)
+        root_scheduled_time = time.perf_counter()
+        await self._execute_call(
+            program.root, client, semaphore, program_id, stage_id,
+            pending_parents, scheduled_time=root_scheduled_time,
+        )
         end_time_epoch = time.time()
 
         self.stage_runtime_info[stage_id] = StageRuntimeInfo(
@@ -273,14 +283,6 @@ class AgenticTraceLoadGenerator:
         logger.info(
             "Agentic trace replay finished: %d completed, %d failed in %.1fs",
             self._completed_requests, self._failed_requests, duration,
-        )
-        self.stage_runtime_info[stage_id] = StageRuntimeInfo(
-            stage_id=stage_id,
-            rate=self.config.arrival_rate,
-            start_time=start_time_epoch,
-            end_time=end_time_epoch,
-            status=StageStatus.COMPLETED if not self.interrupt_sig else StageStatus.FAILED,
-            concurrency_level=self.config.max_concurrency,
         )
 
     async def stop(self) -> None:
