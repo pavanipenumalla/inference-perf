@@ -21,10 +21,10 @@ from pydantic import BaseModel
 
 from inference_perf.apis import RequestLifecycleMetric
 from inference_perf.client.metricsclient import MetricsClient, PerfRuntimeParameters
-from inference_perf.client.metricsclient.base import ModelServerMetrics
+from inference_perf.client.metricsclient.base import ModelServerMetrics, StageStatus
 from inference_perf.client.metricsclient.prometheus_client import PrometheusMetricsClient
 from inference_perf.client.requestdatacollector import RequestDataCollector
-from inference_perf.config import Config, PrometheusMetricsReportConfig, ReportConfig
+from inference_perf.config import Config, LoadType, PrometheusMetricsReportConfig, ReportConfig
 from inference_perf.utils import ReportFile
 
 logger = logging.getLogger(__name__)
@@ -490,11 +490,23 @@ class ReportGenerator:
             metric for metric in self.metrics_collector.get_metrics() if metric.stage_id is not None and metric.stage_id >= 0
         ]
 
+        is_program_mode = self.config.load.type in (LoadType.AGENTIC_TRACE, LoadType.MULTI_PROGRAM)
+
         if report_config.request_lifecycle.summary:
             if len(request_metrics) != 0:
+                summary = summarize_requests(request_metrics, percentiles).model_dump()
+                # Add aggregated program latency across all programs
+                if is_program_mode:
+                    program_durations = [
+                        stage.end_time - stage.start_time
+                        for stage in runtime_parameters.stages.values()
+                        if stage.status == StageStatus.COMPLETED
+                    ]
+                    if program_durations:
+                        summary["program_latency"] = summarize(program_durations, percentiles)
                 report_file = ReportFile(
                     name="summary_lifecycle_metrics",
-                    contents=summarize_requests(request_metrics, percentiles).model_dump(),
+                    contents=summary,
                 )
                 lifecycle_reports.append(report_file)
 
@@ -507,15 +519,18 @@ class ReportGenerator:
                 stage_rate = runtime_parameters.stages[stage_id].rate
                 concurrency_level = runtime_parameters.stages[stage_id].concurrency_level
                 if concurrency_level is not None:
-                    report_file = ReportFile(
-                        name=f"stage_{stage_id}_lifecycle_metrics",
-                        contents=summarize_requests(metrics, percentiles, stage_rate, concurrency_level).model_dump(),
-                    )
+                    contents = summarize_requests(metrics, percentiles, stage_rate, concurrency_level).model_dump()
                 else:
-                    report_file = ReportFile(
-                        name=f"stage_{stage_id}_lifecycle_metrics",
-                        contents=summarize_requests(metrics, percentiles, stage_rate).model_dump(),
-                    )
+                    contents = summarize_requests(metrics, percentiles, stage_rate).model_dump()
+                # Add per-program end-to-end latency
+                if is_program_mode:
+                    stage_info = runtime_parameters.stages[stage_id]
+                    if stage_info.status == StageStatus.COMPLETED:
+                        contents["program_latency"] = stage_info.end_time - stage_info.start_time
+                report_file = ReportFile(
+                    name=f"stage_{stage_id}_lifecycle_metrics",
+                    contents=contents,
+                )
                 lifecycle_reports.append(report_file)
 
         if report_config.request_lifecycle.per_request:
