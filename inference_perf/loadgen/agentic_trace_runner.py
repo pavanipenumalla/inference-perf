@@ -16,7 +16,6 @@
 
 import asyncio
 import logging
-import random
 import signal
 import time
 from typing import Dict, Optional
@@ -45,8 +44,6 @@ class AgenticTraceLoadGenerator:
     using a pending_parents counter as a barrier.
     """
 
-    SEED = 42  # Fixed seed for reproducible program sampling
-
     def __init__(
         self,
         config: AgenticTraceConfig,
@@ -58,7 +55,6 @@ class AgenticTraceLoadGenerator:
         self.fairness_config = fairness_config
         self.reader = AgenticTraceReader(config.trace_file)
         self.stage_runtime_info: Dict[int, StageRuntimeInfo] = {}
-        self.rng = random.Random(self.SEED)
         self._completed_requests = 0
         self._failed_requests = 0
         self._total_llm_calls = 0
@@ -97,10 +93,6 @@ class AgenticTraceLoadGenerator:
                     content = dummy_text
                 else:
                     content = call.input or ""
-                # Prepend program_id to make each program instance unique,
-                # preventing the server from shortcutting via prefix caching
-                # when the same program template is sampled multiple times.
-                content = f"Program: {program_id}\n{content}"
                 request_data = ChatCompletionAPIData(
                     messages=[ChatMessage(role="user", content=content)],
                     max_tokens=call.decode_tokens or 128,
@@ -174,8 +166,8 @@ class AgenticTraceLoadGenerator:
         generator produces per-program metrics, matching MultiProgramLoadGenerator.
         """
         stage_id = program_idx
-        program = self.rng.choice(self.reader.programs)
-        program_id = f"{program.id}_{program_idx}"
+        program = self.reader.programs[program_idx % len(self.reader.programs)]
+        program_id = program.id
         llm_calls = sum(1 for c in self._iter_calls(program.root) if c.type == "llm")
         logger.info(
             "Starting program %s (template %s, %d LLM calls)",
