@@ -1,11 +1,38 @@
+# api:
+#   type: chat
+#   streaming: true
+
+# server:
+#   type: vllm
+#   model_name: meta-llama/Llama-3.1-8B-Instruct
+#   base_url: http://localhost:8080
+#   ignore_eos: true
+
+# load:
+#   type: agentic_trace
+#   fairness:
+#     header_key: "x-gateway-inference-fairness-id"
+#   agentic_trace:
+#     trace_file: "hotpotlats_trace.json"
+#     arrival_rate: 1.0
+#     total_programs: 3
+#     max_concurrency: 50
+#     content_mode: "original"
+
+# storage:
+#   local_storage:
+#     path: "reports-agentic-trace-las"
+
 api:
   type: chat
   streaming: true
+  headers:
+    RITS_API_KEY: <RITS_KEY>
 
 server:
   type: vllm
-  model_name: meta-llama/Llama-3.1-8B-Instruct
-  base_url: http://localhost:30080
+  model_name: <model_name>
+  base_url: <url>
   ignore_eos: true
 
 load:
@@ -13,7 +40,7 @@ load:
   fairness:
     header_key: "x-gateway-inference-fairness-id"
   agentic_trace:
-    trace_file: "/Users/pavanipenumalla/Desktop/agentix-frontend-c/agentix/simulator/traces/hotpotlats_trace.json"
+    trace_file: "sharegpt_trace.json"
     arrival_rate: 1.0
     total_programs: 3
     max_concurrency: 50
@@ -21,4 +48,4 @@ load:
 
 storage:
   local_storage:
-    path: "reports-agentic-trace"
+    path: "reports-agentic-trace-sharegpt"

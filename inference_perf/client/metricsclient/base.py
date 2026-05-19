@@ -36,6 +36,7 @@ class StageRuntimeInfo(BaseModel):
     start_time: float
     status: StageStatus
     concurrency_level: Optional[int] = None
+    program_id: Optional[str] = None
 
 
 class PerfRuntimeParameters:

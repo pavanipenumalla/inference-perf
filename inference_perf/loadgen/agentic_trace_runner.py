@@ -28,8 +28,6 @@ from inference_perf.utils.agentic_trace_reader import AgenticTraceReader, Traced
 
 logger = logging.getLogger(__name__)
 
-# Default per-request timeout in seconds
-DEFAULT_REQUEST_TIMEOUT = 120.0
 
 
 class AgenticTraceLoadGenerator:
@@ -100,25 +98,14 @@ class AgenticTraceLoadGenerator:
                 extra_headers: Optional[dict[str, str]] = None
                 if self.fairness_config:
                     extra_headers = {self.fairness_config.header_key: program_id}
-                try:
-                    await asyncio.wait_for(
-                        client.process_request(
-                            request_data,
-                            stage_id,
-                            scheduled_time,
-                            extra_headers=extra_headers,
-                            program_id=program_id,
-                        ),
-                        timeout=DEFAULT_REQUEST_TIMEOUT,
-                    )
-                    self._completed_requests += 1
-                except asyncio.TimeoutError:
-                    self._failed_requests += 1
-                    logger.warning(
-                        "Request timed out after %.0fs for program %s call %s",
-                        DEFAULT_REQUEST_TIMEOUT, program_id, call.id,
-                    )
-                    return  # Abandon subtree on timeout
+                await client.process_request(
+                    request_data,
+                    stage_id,
+                    scheduled_time,
+                    extra_headers=extra_headers,
+                    program_id=program_id,
+                )
+                self._completed_requests += 1
             except Exception as e:
                 self._failed_requests += 1
                 logger.warning("Request failed for program %s call %s: %s", program_id, call.id, e)
@@ -195,6 +182,7 @@ class AgenticTraceLoadGenerator:
             end_time=end_time_epoch,
             status=StageStatus.COMPLETED if not self.interrupt_sig else StageStatus.FAILED,
             concurrency_level=self.config.max_concurrency,
+            program_id=program_id,
         )
         logger.info("Finished program %s (%.1fs)", program_id, end_time_epoch - start_time_epoch)
 
@@ -232,17 +220,19 @@ class AgenticTraceLoadGenerator:
         start_time_epoch = time.time()
         interval = 1.0 / self.config.arrival_rate
 
-        # Pre-compute total LLM calls for progress reporting
-        # (approximate — actual programs are randomly sampled, but this gives a rough count)
-        avg_llm_calls = sum(
+        num_templates = len(self.reader.programs)
+        llm_calls_per_template = [
             sum(1 for c in self._iter_calls(p.root) if c.type == "llm")
             for p in self.reader.programs
-        ) / len(self.reader.programs)
-        self._total_llm_calls = int(avg_llm_calls * self.config.total_programs)
+        ]
+        self._total_llm_calls = sum(
+            llm_calls_per_template[i % num_templates]
+            for i in range(self.config.total_programs)
+        )
         logger.info(
-            "Starting agentic trace replay: %d programs, ~%d LLM requests, arrival_rate=%.1f/s, max_concurrency=%d",
+            "Starting agentic trace replay: %d programs, %d LLM requests, arrival_rate=%.1f/s",
             self.config.total_programs, self._total_llm_calls,
-            self.config.arrival_rate, self.config.max_concurrency,
+            self.config.arrival_rate,
         )
 
         # Start progress logger

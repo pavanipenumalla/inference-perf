@@ -525,6 +525,8 @@ class ReportGenerator:
                 # Add per-program end-to-end latency
                 if is_program_mode:
                     stage_info = runtime_parameters.stages[stage_id]
+                    if stage_info.program_id is not None:
+                        contents["program_id"] = stage_info.program_id
                     if stage_info.status == StageStatus.COMPLETED:
                         contents["program_latency"] = stage_info.end_time - stage_info.start_time
                 report_file = ReportFile(
