@@ -375,6 +375,10 @@ class OTelTraceReplayConfig(SessionReplayConfig):
         ),
     )
 
+    session_id_header_key: Optional[str] = Field(
+        None, description="Header key for session identity. If set, session_id is sent as this header."
+    )
+
     @model_validator(mode="after")
     def validate_trace_sources(self) -> "OTelTraceReplayConfig":
         # Validate that exactly one of trace_directory, trace_files, or hf_dataset_path is provided

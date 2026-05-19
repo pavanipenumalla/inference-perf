@@ -534,6 +534,8 @@ class LoadGenerator:
                 # Stamp session_id and OTEL context so workers can use them
                 lazy_data.session_id = session_id
                 lazy_data.otel_context = context_dict  # Embed OTEL context in data
+                if hasattr(self.datagen, 'replay_config') and self.datagen.replay_config and hasattr(self.datagen.replay_config, 'session_id_header_key') and self.datagen.replay_config.session_id_header_key:
+                    lazy_data.session_id_header_key = self.datagen.replay_config.session_id_header_key
 
                 event_time = time.perf_counter()
                 queue_data = RequestQueueData(stage_id, lazy_data, event_time, lora_adapter)

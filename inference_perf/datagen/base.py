@@ -277,6 +277,8 @@ class LazyLoadDataMixin(ABC):
                 # Propagate session_id from the lazy wrapper to the materialized object
                 if data.session_id is not None and hasattr(result, "session_id"):
                     result.session_id = data.session_id
+                if data.session_id_header_key is not None and hasattr(result, "session_id_header_key"):
+                    result.session_id_header_key = data.session_id_header_key
                 return result
             else:
                 raise NotImplementedError("Generator doesn't support lazy loading of requested InferenceAPIData")
