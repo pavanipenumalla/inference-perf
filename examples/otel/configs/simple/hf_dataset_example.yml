@@ -16,6 +16,7 @@ data:
     # Model configuration
     use_static_model: true
     static_model_name: "HuggingFaceTB/SmolLM2-135M-Instruct"
+    session_id_header_key: "x-session-id"
     
     # Request configuration
     default_max_tokens: 200
