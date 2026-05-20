@@ -5,7 +5,7 @@ NS="llm-d-precise"
 CM="gaie-kv-events-epp"
 DEPLOY="gaie-kv-events-epp"
 CM_KEY="precise-prefix-cache-config.yaml"
-BASE_DIR="/mnt/data/pavani/inference-perf"
+BASE_DIR="/mnt/data/pavani/otel/local/inference-perf"
 
 if [ $# -lt 1 ]; then
   echo "Usage: $0 <run-name-prefix>"

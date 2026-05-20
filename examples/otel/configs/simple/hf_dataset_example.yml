@@ -1,10 +1,10 @@
 # Example configuration for loading OTel traces from HuggingFace dataset
 # This demonstrates using the hf_dataset_path option to load traces from
-# the lenadan/otel-test-snippet dataset on HuggingFace Hub
+# the Exgentic/agent-llm-traces dataset on HuggingFace Hub
 
 api:
   type: chat
-  streaming: false
+  streaming: true
 
 data:
   type: otel_trace_replay
@@ -12,36 +12,47 @@ data:
     # Load traces from HuggingFace dataset
     # The dataset will be automatically downloaded and cached locally
     hf_dataset_path: "Exgentic/agent-llm-traces"
-    
+
     # Model configuration
     use_static_model: true
-    static_model_name: "HuggingFaceTB/SmolLM2-135M-Instruct"
-    session_id_header_key: "x-session-id"
-    
+    static_model_name: "meta-llama/Llama-3.1-8B-Instruct"
+    session_id_header_key: "x-gateway-inference-fairness-id"
+
     # Request configuration
     default_max_tokens: 200
-    
+
     # Error handling
     include_errors: false
     skip_invalid_files: true
 
 load:
   type: trace_session_replay
+  base_seed: 42
   stages:
-    - concurrent_sessions: 30
-  worker_max_concurrency: 1000
+    - concurrent_sessions: 5
+      num_sessions: 50
+  worker_max_concurrency: 500
 
 server:
   type: vllm
-  base_url: "http://localhost:8000"
-  model_name: "HuggingFaceTB/SmolLM2-135M-Instruct"
+  model_name: meta-llama/Llama-3.1-8B-Instruct
+  base_url: http://localhost:8080
+  ignore_eos: true
+
+metrics:
+  type: prometheus
+  prometheus:
+    url: http://localhost:9090
+    scrape_interval: 15
 
 storage:
   local_storage:
-    path: "reports-hf-dataset-example"
+    path: "reports-hf-50"
 
 report:
   request_lifecycle:
     summary: true
     per_stage: false
     per_request: false
+  session_lifecycle:
+    per_session: true

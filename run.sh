@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # --- Configuration ---
-BASE_DIR="/mnt/data/pavani/otel/inference-perf"
+BASE_DIR="/mnt/data/pavani/otel/local/inference-perf"
 PROMETHEUS_DIR="/mnt/data/prometheus-2.53.0.linux-amd64"
 SCRAPER_DIR="/mnt/data/sai/loadgen-llm-d-scheduler"
 DEPLOYMENT="gaie-kv-events-epp"
@@ -11,8 +11,8 @@ NAMESPACE="llm-d-precise"
 GATEWAY_SVC="infra-kv-events-inference-gateway-istio"
 EPP_SVC="gaie-kv-events-epp"
 SCRAPE_SUBSYSTEM="program_aware"
-SCRAPE_DURATION=100
-CONFIG_FILE="examples/otel/configs/simple/two-sessions-sequential.yml"
+SCRAPE_DURATION=86400
+CONFIG_FILE="examples/otel/configs/simple/hf_dataset_example.yml"
 
 # --- Parse arguments ---
 if [ $# -lt 1 ]; then
@@ -147,7 +147,7 @@ echo "Patched config written to ${PATCHED_CONFIG}"
 echo "Running inference-perf with config: ${PATCHED_CONFIG}"
 cd "${BASE_DIR}"
 source env/bin/activate
-OTEL_TRACES_ENABLED=true inference-perf --config_file "${PATCHED_CONFIG}"
+inference-perf --config_file "${PATCHED_CONFIG}"
 echo "inference-perf finished."
 
 # --- Step 7: Generate plots ---
