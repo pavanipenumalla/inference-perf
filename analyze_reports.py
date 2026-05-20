@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
-Analyze agentic-trace report folders and produce a program duration scatter plot.
+Analyze agentic-trace report folders and produce session duration plots.
 
 Uses quartile-based grouping by LLM call count (num_events) per session.
 Reads per_session_lifecycle_metrics.json from the report directory.
+
+Duration plots only include succeeded sessions (failed sessions have
+truncated durations). Failure analysis plots are generated separately.
 
 Usage:
     python3 analyze_reports.py reports-two-sessions-sequential
@@ -13,11 +16,12 @@ Usage:
 import argparse
 import json
 import os
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 # ---------------------------------------------------------------------------
@@ -72,10 +76,11 @@ def _build_request_bins(totals: Dict[int, float]):
 
 
 # ---------------------------------------------------------------------------
-# Plot: Program duration scatter
+# Plot: Program duration scatter (succeeded sessions only)
 # ---------------------------------------------------------------------------
 
-def plot_program_duration(sessions, out_path, pid_to_group, group_to_color, req_totals):
+def plot_program_duration(sessions, out_path, pid_to_group, group_to_color,
+                          req_totals, total_sessions, failed_count):
     if not sessions:
         return
 
@@ -96,12 +101,89 @@ def plot_program_duration(sessions, out_path, pid_to_group, group_to_color, req_
         ax.annotate(str(n_reqs), (x, y), textcoords="offset points",
                     xytext=(5, 5), fontsize=7, alpha=0.8)
 
+    succeeded_count = len(sessions)
     ax.set_xlabel("Session Start Time (s)")
     ax.set_ylabel("Session Duration (s)")
-    ax.set_title("Session Duration vs Start Time (from per_session_lifecycle_metrics)", fontsize=11)
+    ax.set_title(
+        f"Session Duration vs Start Time — Succeeded Only\n"
+        f"(N={succeeded_count} succeeded, {failed_count} failed, {total_sessions} total)",
+        fontsize=11)
     ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.02, 1.0), ncol=1)
     ax.grid(alpha=0.3)
     fig.tight_layout(rect=[0, 0, 0.88, 1])
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[analyze_reports] Wrote {out_path}")
+
+
+# ---------------------------------------------------------------------------
+# Plot: Failure analysis
+# ---------------------------------------------------------------------------
+
+def plot_failure_analysis(all_sessions, pid_to_group, group_to_color, out_path):
+    """Bar chart of success rate per category + completion fraction for failed sessions."""
+    if not all_sessions:
+        return
+
+    groups_sorted = sorted(group_to_color.keys(),
+                           key=lambda g: int(g.split("-")[0]))
+
+    # Compute success rate per category
+    group_total = {g: 0 for g in groups_sorted}
+    group_succeeded = {g: 0 for g in groups_sorted}
+    failed_completion_fractions = []
+
+    for i, s in enumerate(all_sessions):
+        group = pid_to_group.get(i, None)
+        if group is None:
+            continue
+        group_total[group] += 1
+        if s.get("success", False):
+            group_succeeded[group] += 1
+        else:
+            num_events = s.get("num_events", 1)
+            num_completed = s.get("num_events_completed", 0)
+            if num_events > 0:
+                failed_completion_fractions.append(num_completed / num_events)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Panel 1: Success rate per category
+    ax = axes[0]
+    x_pos = range(len(groups_sorted))
+    rates = [group_succeeded[g] / group_total[g] if group_total[g] > 0 else 0
+             for g in groups_sorted]
+    bar_colors = [group_to_color[g] for g in groups_sorted]
+    bars = ax.bar(x_pos, rates, color=bar_colors, edgecolor="white", width=0.6)
+    for bar, g in zip(bars, groups_sorted):
+        count_text = f"{group_succeeded[g]}/{group_total[g]}"
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.02,
+                count_text, ha="center", va="bottom", fontsize=9)
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(groups_sorted, fontsize=9)
+    ax.set_ylabel("Success Rate")
+    ax.set_ylim(0, 1.15)
+    ax.set_title("Session Success Rate by Category")
+    ax.grid(alpha=0.3, axis="y")
+
+    # Panel 2: Completion fraction CDF for failed sessions
+    ax = axes[1]
+    if failed_completion_fractions:
+        vals = sorted(failed_completion_fractions)
+        ys = np.arange(1, len(vals) + 1) / len(vals)
+        ax.plot(vals, ys, linewidth=2, color="firebrick")
+        ax.set_xlabel("Completion Fraction (events_completed / total_events)")
+        ax.set_ylabel("CDF (fraction of failed sessions)")
+        ax.set_title(f"Where Do Sessions Fail? (n={len(vals)} failed)")
+        ax.set_xlim(0, 1.05)
+        ax.set_ylim(0, 1.05)
+        ax.grid(alpha=0.3)
+    else:
+        ax.text(0.5, 0.5, "No failed sessions", ha="center", va="center",
+                fontsize=12, transform=ax.transAxes)
+        ax.set_title("Where Do Sessions Fail?")
+
+    fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"[analyze_reports] Wrote {out_path}")
@@ -124,25 +206,46 @@ def main():
         print(f"[analyze_reports] Not a directory: {report_dir}")
         return
 
-    sessions = load_per_session_metrics(report_dir)
-    if not sessions:
+    all_sessions = load_per_session_metrics(report_dir)
+    if not all_sessions:
         return
-    print(f"[analyze_reports] Loaded {len(sessions)} sessions from {report_dir}")
 
-    req_totals = {i: s["num_events"] for i, s in enumerate(sessions)}
-    pid_to_group, group_to_color = _build_request_bins(req_totals)
+    total_sessions = len(all_sessions)
+    succeeded_sessions = [s for s in all_sessions if s.get("success", False)]
+    failed_sessions = [s for s in all_sessions if not s.get("success", False)]
+    print(f"[analyze_reports] Loaded {total_sessions} sessions "
+          f"({len(succeeded_sessions)} succeeded, {len(failed_sessions)} failed)")
+
+    # Bin using ALL sessions' num_events (so categories are consistent)
+    all_req_totals = {i: s["num_events"] for i, s in enumerate(all_sessions)}
+    pid_to_group_all, group_to_color = _build_request_bins(all_req_totals)
+
+    # Build mapping for succeeded sessions only (re-indexed)
+    succeeded_req_totals = {i: s["num_events"] for i, s in enumerate(succeeded_sessions)}
+    pid_to_group_succeeded = {}
+    for i, s in enumerate(succeeded_sessions):
+        # Find the original index in all_sessions to get the group
+        orig_idx = all_sessions.index(s)
+        pid_to_group_succeeded[i] = pid_to_group_all.get(orig_idx, "unknown")
 
     for group in sorted(group_to_color.keys()):
-        count = sum(1 for g in pid_to_group.values() if g == group)
-        print(f"[analyze_reports]   {group}: {count} sessions")
+        total_in_group = sum(1 for g in pid_to_group_all.values() if g == group)
+        succeeded_in_group = sum(1 for g in pid_to_group_succeeded.values() if g == group)
+        print(f"[analyze_reports]   {group}: {succeeded_in_group}/{total_in_group} sessions succeeded")
 
     out_dir = args.output_dir or report_dir
     plots_dir = os.path.join(out_dir, "report_plots")
     os.makedirs(plots_dir, exist_ok=True)
 
-    plot_program_duration(sessions,
+    # Duration plot: succeeded sessions only
+    plot_program_duration(succeeded_sessions,
                           os.path.join(plots_dir, "program_duration.png"),
-                          pid_to_group, group_to_color, req_totals)
+                          pid_to_group_succeeded, group_to_color,
+                          succeeded_req_totals, total_sessions, len(failed_sessions))
+
+    # Failure analysis plot: all sessions
+    plot_failure_analysis(all_sessions, pid_to_group_all, group_to_color,
+                          os.path.join(plots_dir, "failure_analysis.png"))
 
     print(f"[analyze_reports] All plots written to {plots_dir}/")
 

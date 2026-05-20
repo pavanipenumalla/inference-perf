@@ -2,8 +2,8 @@
 """
 Compare program durations across scheduling strategies from inference-perf reports.
 
-Produces a CDF of session duration with lines grouped by LLM call count quartiles
-and differentiated by strategy via line style.
+Duration plots only include succeeded sessions (failed sessions have truncated
+durations). Failure analysis plots are generated separately.
 
 Reads per_session_lifecycle_metrics.json from each report directory.
 
@@ -32,6 +32,12 @@ STRATEGY_STYLES = {
     "RR":  {"linestyle": ":",  "marker": "D", "markevery": 30},
 }
 
+STRATEGY_COLORS = {
+    "DRR": plt.cm.Set2.colors[0],
+    "LAS": plt.cm.Set2.colors[1],
+    "RR":  plt.cm.Set2.colors[2],
+}
+
 GROUP_COLORS = plt.cm.tab10.colors
 
 
@@ -47,13 +53,15 @@ def load_per_session_metrics(report_dir: str) -> List[dict]:
 
 
 def load_strategy_metrics(report_dir: str) -> Dict[int, dict]:
-    """Return {session_index: {"duration": ..., "requests": ...}} from per-session data."""
+    """Return {session_index: {"duration": ..., "requests": ..., "success": ...}} from per-session data."""
     sessions = load_per_session_metrics(report_dir)
     metrics = {}
     for i, s in enumerate(sessions):
         metrics[i] = {
             "duration": s["duration_sec"],
             "requests": s["num_events"],
+            "success": s.get("success", True),
+            "num_events_completed": s.get("num_events_completed", 0),
         }
     return metrics
 
@@ -92,19 +100,27 @@ def build_request_groups(req_totals: Dict[int, int]) -> Tuple[Dict[int, str], Di
     return pid_to_group, group_to_color
 
 
+# ---------------------------------------------------------------------------
+# Duration plots (succeeded sessions only)
+# ---------------------------------------------------------------------------
+
 def plot_duration_cdf(strategy_metrics: Dict[str, Dict[int, dict]],
                       pid_to_group: Dict[int, str],
                       group_to_color: Dict[str, tuple],
                       out_path: str):
-    """CDF of session duration: one line per (strategy, group) pair."""
+    """CDF of session duration (succeeded only): one line per (strategy, group) pair."""
     fig, ax = plt.subplots(figsize=(14, 7))
     groups_sorted = sorted(group_to_color.keys(),
                            key=lambda g: int(g.split("-")[0]))
 
     for strategy, metrics in sorted(strategy_metrics.items()):
         style = STRATEGY_STYLES.get(strategy, {"linestyle": "-", "marker": "x", "markevery": 30})
+        total_count = len(metrics)
+        succeeded_count = sum(1 for m in metrics.values() if m["success"])
         for group in groups_sorted:
-            stage_ids = [sid for sid in metrics if pid_to_group.get(sid) == group]
+            stage_ids = [sid for sid in metrics
+                         if pid_to_group.get(sid) == group and metrics[sid]["success"]]
+            total_in_group = sum(1 for sid in metrics if pid_to_group.get(sid) == group)
             if not stage_ids:
                 continue
             vals = sorted(metrics[sid]["duration"] for sid in stage_ids)
@@ -116,15 +132,16 @@ def plot_duration_cdf(strategy_metrics: Dict[str, Dict[int, dict]],
                     markevery=style["markevery"],
                     markersize=5,
                     linewidth=1.8,
-                    label=f"{strategy} — {group} ({len(vals)})",
+                    label=f"{strategy} — {group} (n={len(vals)}/{total_in_group})",
                     alpha=0.85)
 
     ax.set_xlabel("Session Duration (s)", fontsize=11)
     ax.set_ylabel("CDF (fraction of sessions)", fontsize=11)
     ax.set_ylim(0, 1.05)
-    ax.set_title("CDF of Session Duration by Strategy & Request-Count Group", fontsize=12)
+    ax.set_title("CDF of Session Duration by Strategy & Request-Count Group\n(Succeeded Sessions Only)",
+                 fontsize=12)
     ax.legend(fontsize=7.5, loc="upper left", bbox_to_anchor=(1.02, 1.0), ncol=1,
-              title="Strategy — Group (n)", title_fontsize=8)
+              title="Strategy — Group (succeeded/total)", title_fontsize=8)
     ax.grid(alpha=0.3)
     fig.tight_layout(rect=[0, 0, 0.78, 1])
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
@@ -136,41 +153,38 @@ def plot_duration_cdf_per_category(strategy_metrics: Dict[str, Dict[int, dict]],
                                    pid_to_group: Dict[int, str],
                                    group_to_color: Dict[str, tuple],
                                    out_dir: str):
-    """One separate plot per session category so small-session differences are visible."""
+    """One separate plot per session category (succeeded only)."""
     groups_sorted = sorted(group_to_color.keys(),
                            key=lambda g: int(g.split("-")[0]))
 
-    strategy_colors = {"DRR": plt.cm.Set2.colors[0],
-                       "LAS": plt.cm.Set2.colors[1],
-                       "RR":  plt.cm.Set2.colors[2]}
-
     for group in groups_sorted:
         fig, ax = plt.subplots(figsize=(8, 5))
-        n_in_group = sum(1 for s in pid_to_group.values() if s == group)
 
         for strategy, metrics in sorted(strategy_metrics.items()):
             style = STRATEGY_STYLES.get(strategy, {"linestyle": "-", "marker": "x", "markevery": 10})
-            stage_ids = [sid for sid in metrics if pid_to_group.get(sid) == group]
+            stage_ids = [sid for sid in metrics
+                         if pid_to_group.get(sid) == group and metrics[sid]["success"]]
+            total_in_group = sum(1 for sid in metrics if pid_to_group.get(sid) == group)
             if not stage_ids:
                 continue
             vals = sorted(metrics[sid]["duration"] for sid in stage_ids)
             ys = np.arange(1, len(vals) + 1) / len(vals)
             me = max(1, len(vals) // 10)
             ax.plot(vals, ys,
-                    color=strategy_colors.get(strategy, "gray"),
+                    color=STRATEGY_COLORS.get(strategy, "gray"),
                     linestyle=style["linestyle"],
                     marker=style["marker"],
                     markevery=me,
                     markersize=5,
                     linewidth=1.8,
-                    label=strategy,
+                    label=f"{strategy} (n={len(vals)}/{total_in_group})",
                     alpha=0.85)
 
-        ax.set_title(f"CDF of Session Duration — {group} (n={n_in_group})", fontsize=11)
+        ax.set_title(f"CDF of Session Duration — {group}\n(Succeeded Sessions Only)", fontsize=11)
         ax.set_xlabel("Session Duration (s)", fontsize=10)
         ax.set_ylabel("CDF", fontsize=10)
         ax.set_ylim(0, 1.05)
-        ax.legend(fontsize=9)
+        ax.legend(fontsize=9, title="Strategy (succeeded/total)")
         ax.grid(alpha=0.3)
         fig.tight_layout()
 
@@ -183,25 +197,28 @@ def plot_duration_cdf_per_category(strategy_metrics: Dict[str, Dict[int, dict]],
 
 def plot_avg_request_completion(strategy_metrics: Dict[str, Dict[int, dict]],
                                 out_path: str):
-    """Bar chart of average per-request completion time for each strategy."""
+    """Bar chart of average per-request completion time (succeeded sessions only)."""
     fig, ax = plt.subplots(figsize=(8, 5))
     names = sorted(strategy_metrics.keys())
-    colors = plt.cm.Set2.colors
+    colors = [STRATEGY_COLORS.get(n, plt.cm.Set2.colors[i % 8]) for i, n in enumerate(names)]
 
     avgs = []
+    labels = []
     for name in names:
-        per_req = [m["duration"] / m["requests"]
-                   for m in strategy_metrics[name].values() if m["requests"] > 0]
+        succeeded = {sid: m for sid, m in strategy_metrics[name].items()
+                     if m["success"] and m["requests"] > 0}
+        per_req = [m["duration"] / m["requests"] for m in succeeded.values()]
         avgs.append(sum(per_req) / len(per_req) if per_req else 0)
+        total = len(strategy_metrics[name])
+        labels.append(f"{name}\n({len(succeeded)}/{total})")
 
-    bars = ax.bar(names, avgs, color=[colors[i % len(colors)] for i in range(len(names))],
-                  edgecolor="white", width=0.45)
+    bars = ax.bar(labels, avgs, color=colors, edgecolor="white", width=0.45)
     for bar, val in zip(bars, avgs):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
                 f"{val:.2f}s", ha="center", va="bottom", fontsize=10)
 
     ax.set_ylabel("Avg Per-Request Completion Time (s)", fontsize=11)
-    ax.set_title("Average Request Completion Time by Strategy", fontsize=12)
+    ax.set_title("Average Request Completion Time by Strategy\n(Succeeded Sessions Only)", fontsize=12)
     ax.grid(alpha=0.3, axis="y")
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
@@ -211,23 +228,26 @@ def plot_avg_request_completion(strategy_metrics: Dict[str, Dict[int, dict]],
 
 def plot_sum_program_duration(strategy_metrics: Dict[str, Dict[int, dict]],
                               out_path: str):
-    """Bar chart of sum of all session durations for each strategy."""
+    """Bar chart of sum of session durations (succeeded sessions only)."""
     fig, ax = plt.subplots(figsize=(8, 5))
     names = sorted(strategy_metrics.keys())
-    colors = plt.cm.Set2.colors
+    colors = [STRATEGY_COLORS.get(n, plt.cm.Set2.colors[i % 8]) for i, n in enumerate(names)]
 
     sums = []
+    labels = []
     for name in names:
-        sums.append(sum(m["duration"] for m in strategy_metrics[name].values()))
+        succeeded = {sid: m for sid, m in strategy_metrics[name].items() if m["success"]}
+        sums.append(sum(m["duration"] for m in succeeded.values()))
+        total = len(strategy_metrics[name])
+        labels.append(f"{name}\n({len(succeeded)}/{total})")
 
-    bars = ax.bar(names, sums, color=[colors[i % len(colors)] for i in range(len(names))],
-                  edgecolor="white", width=0.45)
+    bars = ax.bar(labels, sums, color=colors, edgecolor="white", width=0.45)
     for bar, val in zip(bars, sums):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
                 f"{val:,.0f}s", ha="center", va="bottom", fontsize=10)
 
     ax.set_ylabel("Sum of Session Durations (s)", fontsize=11)
-    ax.set_title("Total Session Duration by Strategy", fontsize=12)
+    ax.set_title("Total Session Duration by Strategy\n(Succeeded Sessions Only)", fontsize=12)
     ax.grid(alpha=0.3, axis="y")
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
@@ -237,24 +257,27 @@ def plot_sum_program_duration(strategy_metrics: Dict[str, Dict[int, dict]],
 
 def plot_avg_program_duration(strategy_metrics: Dict[str, Dict[int, dict]],
                               out_path: str):
-    """Bar chart of average session duration for each strategy."""
+    """Bar chart of average session duration (succeeded sessions only)."""
     fig, ax = plt.subplots(figsize=(8, 5))
     names = sorted(strategy_metrics.keys())
-    colors = plt.cm.Set2.colors
+    colors = [STRATEGY_COLORS.get(n, plt.cm.Set2.colors[i % 8]) for i, n in enumerate(names)]
 
     avgs = []
+    labels = []
     for name in names:
-        durs = [m["duration"] for m in strategy_metrics[name].values()]
+        succeeded = {sid: m for sid, m in strategy_metrics[name].items() if m["success"]}
+        durs = [m["duration"] for m in succeeded.values()]
         avgs.append(sum(durs) / len(durs) if durs else 0)
+        total = len(strategy_metrics[name])
+        labels.append(f"{name}\n({len(succeeded)}/{total})")
 
-    bars = ax.bar(names, avgs, color=[colors[i % len(colors)] for i in range(len(names))],
-                  edgecolor="white", width=0.45)
+    bars = ax.bar(labels, avgs, color=colors, edgecolor="white", width=0.45)
     for bar, val in zip(bars, avgs):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
                 f"{val:.1f}s", ha="center", va="bottom", fontsize=10)
 
     ax.set_ylabel("Avg Session Duration (s)", fontsize=11)
-    ax.set_title("Average Session Duration by Strategy", fontsize=12)
+    ax.set_title("Average Session Duration by Strategy\n(Succeeded Sessions Only)", fontsize=12)
     ax.grid(alpha=0.3, axis="y")
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
@@ -266,12 +289,14 @@ def print_percentile_table(strategy_metrics: Dict[str, Dict[int, dict]],
                            pid_to_group: Dict[int, str],
                            group_to_color: Dict[str, tuple],
                            out_path: str = None):
-    """Print and optionally save p50/p99 of session duration per category per strategy."""
+    """Print and optionally save p50/p99 of session duration per category per strategy (succeeded only)."""
     groups_sorted = sorted(group_to_color.keys(),
                            key=lambda g: int(g.split("-")[0]))
     strategies = sorted(strategy_metrics.keys())
 
     lines = []
+    lines.append("(Succeeded sessions only)")
+    lines.append("")
     header_strats = "  ".join(f"{s:>16s}" for s in strategies)
     sub_header = "  ".join(f"{'p50':>7s} {'p99':>7s}" for _ in strategies)
     lines.append(f"{'Category':<20s}  {header_strats}")
@@ -283,7 +308,8 @@ def print_percentile_table(strategy_metrics: Dict[str, Dict[int, dict]],
         for strategy in strategies:
             metrics = strategy_metrics[strategy]
             durs = sorted(metrics[sid]["duration"]
-                          for sid in metrics if pid_to_group.get(sid) == group)
+                          for sid in metrics
+                          if pid_to_group.get(sid) == group and metrics[sid]["success"])
             if durs:
                 p50 = np.percentile(durs, 50)
                 p99 = np.percentile(durs, 99)
@@ -294,7 +320,7 @@ def print_percentile_table(strategy_metrics: Dict[str, Dict[int, dict]],
 
     row = f"{'ALL':<20s}"
     for strategy in strategies:
-        durs = sorted(m["duration"] for m in strategy_metrics[strategy].values())
+        durs = sorted(m["duration"] for m in strategy_metrics[strategy].values() if m["success"])
         if durs:
             p50 = np.percentile(durs, 50)
             p99 = np.percentile(durs, 99)
@@ -303,6 +329,15 @@ def print_percentile_table(strategy_metrics: Dict[str, Dict[int, dict]],
             row += f"  {'—':>7s} {'—':>7s}"
     lines.append(row)
 
+    # Add success/failure summary
+    lines.append("")
+    lines.append("Success/Failure Summary:")
+    for strategy in strategies:
+        total = len(strategy_metrics[strategy])
+        succeeded = sum(1 for m in strategy_metrics[strategy].values() if m["success"])
+        failed = total - succeeded
+        lines.append(f"  {strategy}: {succeeded}/{total} succeeded ({failed} failed)")
+
     print("\n" + "\n".join(lines) + "\n")
 
     if out_path:
@@ -310,6 +345,109 @@ def print_percentile_table(strategy_metrics: Dict[str, Dict[int, dict]],
             f.write("\n".join(lines) + "\n")
         print(f"[compare_reports] Wrote {out_path}")
 
+
+# ---------------------------------------------------------------------------
+# Failure analysis plots (Layer 2)
+# ---------------------------------------------------------------------------
+
+def plot_failure_rate_comparison(strategy_metrics: Dict[str, Dict[int, dict]],
+                                 pid_to_group: Dict[int, str],
+                                 group_to_color: Dict[str, tuple],
+                                 out_path: str):
+    """Grouped bar chart of success rate per category per strategy."""
+    groups_sorted = sorted(group_to_color.keys(),
+                           key=lambda g: int(g.split("-")[0]))
+    strategies = sorted(strategy_metrics.keys())
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    n_groups = len(groups_sorted)
+    n_strategies = len(strategies)
+    bar_width = 0.8 / n_strategies
+    x = np.arange(n_groups)
+
+    for i, strategy in enumerate(strategies):
+        metrics = strategy_metrics[strategy]
+        rates = []
+        annotations = []
+        for group in groups_sorted:
+            sids_in_group = [sid for sid in metrics if pid_to_group.get(sid) == group]
+            total = len(sids_in_group)
+            succeeded = sum(1 for sid in sids_in_group if metrics[sid]["success"])
+            rates.append(succeeded / total if total > 0 else 0)
+            annotations.append(f"{succeeded}/{total}")
+
+        offset = (i - n_strategies / 2 + 0.5) * bar_width
+        bars = ax.bar(x + offset, rates, bar_width,
+                      color=STRATEGY_COLORS.get(strategy, "gray"),
+                      label=strategy, alpha=0.85, edgecolor="white")
+        for bar, ann in zip(bars, annotations):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.02,
+                    ann, ha="center", va="bottom", fontsize=8)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(groups_sorted, fontsize=9)
+    ax.set_ylabel("Success Rate", fontsize=11)
+    ax.set_ylim(0, 1.2)
+    ax.set_title("Session Success Rate by Category & Strategy", fontsize=12)
+    ax.legend(fontsize=9)
+    ax.grid(alpha=0.3, axis="y")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[compare_reports] Wrote {out_path}")
+
+
+def plot_failure_completion_cdf(strategy_metrics: Dict[str, Dict[int, dict]],
+                                out_path: str):
+    """CDF of completion fraction for failed sessions, one line per strategy."""
+    fig, ax = plt.subplots(figsize=(8, 5))
+    strategies = sorted(strategy_metrics.keys())
+    has_data = False
+
+    for strategy in strategies:
+        metrics = strategy_metrics[strategy]
+        fractions = []
+        for m in metrics.values():
+            if not m["success"] and m["requests"] > 0:
+                fractions.append(m["num_events_completed"] / m["requests"])
+        if not fractions:
+            continue
+        has_data = True
+        vals = sorted(fractions)
+        ys = np.arange(1, len(vals) + 1) / len(vals)
+        style = STRATEGY_STYLES.get(strategy, {"linestyle": "-", "marker": "x", "markevery": 5})
+        me = max(1, len(vals) // 8)
+        ax.plot(vals, ys,
+                color=STRATEGY_COLORS.get(strategy, "gray"),
+                linestyle=style["linestyle"],
+                marker=style["marker"],
+                markevery=me,
+                markersize=5,
+                linewidth=1.8,
+                label=f"{strategy} (n={len(vals)} failed)",
+                alpha=0.85)
+
+    if has_data:
+        ax.set_xlabel("Completion Fraction (events_completed / total_events)", fontsize=10)
+        ax.set_ylabel("CDF (fraction of failed sessions)", fontsize=10)
+        ax.set_title("Where Do Sessions Fail? — Completion Fraction CDF", fontsize=11)
+        ax.set_xlim(0, 1.05)
+        ax.set_ylim(0, 1.05)
+        ax.legend(fontsize=9)
+        ax.grid(alpha=0.3)
+    else:
+        ax.text(0.5, 0.5, "No failed sessions in any strategy",
+                ha="center", va="center", fontsize=12, transform=ax.transAxes)
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[compare_reports] Wrote {out_path}")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
@@ -328,7 +466,9 @@ def main():
     for name, report_dir in [("DRR", args.drr), ("LAS", args.las), ("RR", args.rr)]:
         metrics = load_strategy_metrics(report_dir)
         strategy_metrics[name] = metrics
-        print(f"[compare_reports] {name}: {len(metrics)} sessions with duration data")
+        total = len(metrics)
+        succeeded = sum(1 for m in metrics.values() if m["success"])
+        print(f"[compare_reports] {name}: {total} sessions ({succeeded} succeeded, {total - succeeded} failed)")
 
     # Use the first strategy's data for quartile grouping (all replay the same sessions)
     first_metrics = next(iter(strategy_metrics.values()))
@@ -340,6 +480,7 @@ def main():
         count = sum(1 for g in pid_to_group.values() if g == group)
         print(f"[compare_reports]   {group}: {count} sessions")
 
+    # Layer 1: Duration-based plots (succeeded sessions only)
     print_percentile_table(strategy_metrics, pid_to_group, group_to_color,
                            os.path.join(args.output_dir, "percentile_table.txt"))
 
@@ -353,6 +494,12 @@ def main():
                                os.path.join(args.output_dir, "avg_request_completion.png"))
     plot_sum_program_duration(strategy_metrics,
                              os.path.join(args.output_dir, "sum_program_duration.png"))
+
+    # Layer 2: Failure analysis plots (all sessions)
+    plot_failure_rate_comparison(strategy_metrics, pid_to_group, group_to_color,
+                                os.path.join(args.output_dir, "failure_rate_comparison.png"))
+    plot_failure_completion_cdf(strategy_metrics,
+                               os.path.join(args.output_dir, "failure_completion_cdf.png"))
 
     print(f"[compare_reports] Done — output in {args.output_dir}/")
 
