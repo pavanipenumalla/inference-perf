@@ -99,6 +99,96 @@ def _detect_bad_tool_calls(
 # --- end bad_tool_call_handling --------------------------------------------
 
 
+def _repair_truncated_json(s: str) -> str:
+    """Attempt to close a truncated JSON string so it becomes syntactically valid.
+
+    When a model hits max_tokens mid-generation, tool_call arguments can be
+    truncated (e.g. '{"key": "val' or '{"items": [{"name": "foo"}').
+    This function scans the string and appends the minimal closing characters
+    needed to produce valid JSON.
+
+    Returns the original string if it's already valid JSON.
+    """
+    try:
+        json.loads(s)
+        return s
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    if not s.strip():
+        return "{}"
+
+    in_string = False
+    escape_next = False
+    stack: List[str] = []
+
+    for ch in s:
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\":
+            if in_string:
+                escape_next = True
+            continue
+        if ch == '"' and not escape_next:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch in ("{", "["):
+            stack.append(ch)
+        elif ch == "}":
+            if stack and stack[-1] == "{":
+                stack.pop()
+        elif ch == "]":
+            if stack and stack[-1] == "[":
+                stack.pop()
+
+    result = s
+    if in_string:
+        result += '"'
+
+    for opener in reversed(stack):
+        if opener == "{":
+            result += "}"
+        elif opener == "[":
+            result += "]"
+
+    try:
+        json.loads(result)
+        return result
+    except (json.JSONDecodeError, ValueError):
+        return "{}"
+
+
+def _repair_tool_call_arguments(tool_calls: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], bool]:
+    """Validate and repair tool_call arguments fields.
+
+    Returns (repaired_tool_calls, was_repaired) tuple.
+    """
+    repaired = False
+    result = []
+    for tc in tool_calls:
+        tc_copy = dict(tc)
+        fn = tc_copy.get("function", {})
+        args_str = fn.get("arguments", "")
+        if args_str:
+            try:
+                json.loads(args_str)
+            except (json.JSONDecodeError, ValueError):
+                repaired_args = _repair_truncated_json(args_str)
+                fn_copy = dict(fn)
+                fn_copy["arguments"] = repaired_args
+                tc_copy["function"] = fn_copy
+                repaired = True
+                logger.info(
+                    f"Repaired truncated tool_call arguments "
+                    f"(original {len(args_str)} chars, repaired {len(repaired_args)} chars)"
+                )
+        result.append(tc_copy)
+    return result, repaired
+
+
 class EventFailedError(Exception):
     """Raised by EventOutputRegistry.require_async when the awaited event failed."""
 
@@ -785,6 +875,9 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
             streaming_output_message: Optional[Dict[str, Any]] = None
             if tool_call_chunks:
                 live_tool_calls = [tool_call_chunks[i] for i in sorted(tool_call_chunks)]
+                live_tool_calls, was_repaired = _repair_tool_call_arguments(live_tool_calls)
+                if was_repaired:
+                    logger.warning(f"Event {self.event_id}: repaired truncated tool_call arguments in streaming response")
                 streaming_output_message = {"role": "assistant", "tool_calls": live_tool_calls}
                 if output_text:
                     streaming_output_message["content"] = output_text
@@ -839,6 +932,11 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
                     output_text = text_content
 
                 if tool_calls:
+                    tool_calls, was_repaired = _repair_tool_call_arguments(tool_calls)
+                    if was_repaired:
+                        logger.warning(
+                            f"Event {self.event_id}: repaired truncated tool_call arguments in non-streaming response"
+                        )
                     output_message = {"role": "assistant", "tool_calls": tool_calls}
                     if output_text:
                         output_message["content"] = output_text
