@@ -385,7 +385,7 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
             logger.debug(f"Event {self.event_id} waiting for {len(self.predecessor_event_ids)} predecessor(s)")
             try:
                 await asyncio.gather(
-                    *[self.registry.require_async(event_id, timeout_sec=3600.0) for event_id in self.predecessor_event_ids]
+                    *[self.registry.require_async(event_id, timeout_sec=10800.0) for event_id in self.predecessor_event_ids]
                 )
             except EventFailedError:
                 self._fail_and_notify(session_id, "predecessor failed")
