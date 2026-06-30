@@ -229,7 +229,7 @@ class EventOutputRegistry:
     def is_event_failed(self, event_id: str) -> bool:
         return event_id in self._failed_event_ids
 
-    async def require_async(self, event_id: str, timeout_sec: float = 3600.0) -> str:
+    async def require_async(self, event_id: str, timeout_sec: Optional[float] = 3600.0) -> str:
         if event_id in self._failed_event_ids:
             raise EventFailedError(event_id)
 
@@ -252,9 +252,13 @@ class EventOutputRegistry:
         try:
             await asyncio.wait_for(signal.wait(), timeout=timeout_sec)
         except asyncio.TimeoutError as e:
+            timeout_msg = (
+                f"not available after {timeout_sec:.1f}s" if timeout_sec is not None
+                else "not available (no timeout)"
+            )
             raise TimeoutError(
-                f"EventOutputRegistry: output for '{event_id}' not available after "
-                f"{timeout_sec:.1f}s. Check that the predecessor is not blocked or failed."
+                f"EventOutputRegistry: output for '{event_id}' {timeout_msg}. "
+                "Check that the predecessor is not blocked or failed."
             ) from e
 
         if event_id in self._failed_event_ids:
@@ -294,6 +298,7 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
     # `none` (default) is byte-identical to upstream main; `use_recorded`
     # substitutes the recorded assistant message at the affected slot.
     bad_tool_call_handling: BadToolCallHandling = BadToolCallHandling.NONE
+    predecessor_wait_timeout: Optional[float] = None
     # Set by _build_messages_with_substitution when it calls record_failure
     # early (e.g. recorded fallback also malformed). Lets the caller pass the
     # right reason string to _fail_and_notify instead of a generic fallback.
@@ -385,7 +390,7 @@ class SessionChatCompletionAPIData(ChatCompletionAPIData):
             logger.debug(f"Event {self.event_id} waiting for {len(self.predecessor_event_ids)} predecessor(s)")
             try:
                 await asyncio.gather(
-                    *[self.registry.require_async(event_id, timeout_sec=10800.0) for event_id in self.predecessor_event_ids]
+                    *[self.registry.require_async(event_id, timeout_sec=self.predecessor_wait_timeout) for event_id in self.predecessor_event_ids]
                 )
             except EventFailedError:
                 self._fail_and_notify(session_id, "predecessor failed")
@@ -1390,6 +1395,7 @@ class ReplayGraphSessionGeneratorBase(SessionGenerator, LazyLoadDataMixin):
             bad_tool_call_handling=getattr(self.replay_config, "bad_tool_call_handling", BadToolCallHandling.NONE)
             if self.replay_config
             else BadToolCallHandling.NONE,
+            predecessor_wait_timeout=self.replay_config.predecessor_wait_timeout if self.replay_config else None,
         )
 
     def cleanup_session(self, session_id: str) -> None:
