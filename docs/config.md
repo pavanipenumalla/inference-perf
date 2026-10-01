@@ -586,6 +586,11 @@ load:
 - Omit for no rate limiting
 - Useful for controlled ramp-up scenarios
 
+**`session_arrival`** (optional, default `constant`): How session starts are spaced at `session_rate`
+- `constant` starts one session every `1/session_rate` seconds
+- `poisson` draws each gap from an exponential distribution with mean `1/session_rate`, so starts arrive as a Poisson process. Gaps are seeded from `load.base_seed` and the stage index, so a rerun with the same seed repeats the arrival times
+- `poisson` requires `session_rate`. With `concurrent_sessions: 0` and `duration`, sessions start on this schedule however many are active (open loop)
+
 **`duration`** (optional): Planned stage length in seconds — bound the stage by time rather than by session count
 - At the deadline the stage stops dispatching and exits as COMPLETED
 - Sessions still running are recorded as truncated: counted under `num_sessions_not_completed_active`, and left out of the session success/failure counts and duration percentiles. The requests they completed still count

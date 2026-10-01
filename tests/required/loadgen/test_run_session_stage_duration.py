@@ -35,9 +35,18 @@ import pytest
 
 from inference_perf.apis import LazyLoadInferenceAPIData, SessionLifecycleMetric
 from inference_perf.client.server_metrics.base import StageStatus
-from inference_perf.config import APIConfig, APIType, DataConfig, LoadConfig, LoadType, TraceSessionReplayLoadStage
+from inference_perf.config import (
+    APIConfig,
+    APIType,
+    DataConfig,
+    LoadConfig,
+    LoadType,
+    SessionArrival,
+    TraceSessionReplayLoadStage,
+)
 from inference_perf.datagen import SessionGenerator
 from inference_perf.loadgen.load_generator import LoadGenerator
+from inference_perf.loadgen.load_timer import session_start_gaps
 from inference_perf.metrics import SessionMetricsCollector
 
 
@@ -301,6 +310,26 @@ async def test_boundary_rows_end_at_the_stage_boundary_not_after_teardown() -> N
     assert metrics
     # Exactly the stage boundary, not merely close to it: both come from the same stamp.
     assert all(m.end_time == stage_end for m in metrics)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("arrival", [SessionArrival.CONSTANT, SessionArrival.POISSON])
+async def test_open_loop_stage_spaces_starts_with_the_configured_arrival(arrival: SessionArrival) -> None:
+    """An open-loop stage takes its start gaps from session_start_gaps, seeded per stage.
+
+    The seed is [base_seed, stage_id], so a rerun with the same base_seed repeats the
+    arrival times and two stages in one run do not share them.
+    """
+    datagen = ScriptedSessionGenerator(num_sessions=5000, polls_to_complete=None)
+    loadgen, _ = _load_generator(datagen)
+    stage = TraceSessionReplayLoadStage(concurrent_sessions=0, session_rate=200, session_arrival=arrival, duration=0.2)
+
+    with patch("inference_perf.loadgen.load_generator.session_start_gaps", wraps=session_start_gaps) as gaps:
+        await _run_stage(loadgen, stage, stage_id=3)
+
+    gaps.assert_called_once_with(200, arrival, [loadgen.base_seed, 3])
+    assert datagen.activated, "an open-loop stage must admit sessions on its own schedule"
+    assert loadgen.stage_runtime_info[3].status == StageStatus.COMPLETED
 
 
 @pytest.mark.asyncio

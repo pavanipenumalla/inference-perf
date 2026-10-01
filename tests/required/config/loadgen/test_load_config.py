@@ -26,6 +26,7 @@ from inference_perf.config import (
     LoadConfig,
     LoadType,
     MultiLoRAConfig,
+    SessionArrival,
     StandardLoadStage,
     StageGenType,
     SweepConfig,
@@ -96,6 +97,23 @@ def test_trace_session_replay_stage_zero_concurrency_allowed() -> None:
 def test_trace_session_replay_stage_rate_cannot_exceed_concurrency() -> None:
     with pytest.raises(ValueError, match="cannot exceed"):
         TraceSessionReplayLoadStage(concurrent_sessions=2, session_rate=5)
+
+
+def test_trace_session_replay_stage_arrival_defaults_to_constant() -> None:
+    stage = TraceSessionReplayLoadStage(concurrent_sessions=4, session_rate=2)
+    assert stage.session_arrival == SessionArrival.CONSTANT
+
+
+def test_trace_session_replay_stage_accepts_poisson_arrival() -> None:
+    stage = TraceSessionReplayLoadStage(
+        concurrent_sessions=0, session_rate=0.5, session_arrival=SessionArrival.POISSON, duration=60
+    )
+    assert stage.session_arrival == SessionArrival.POISSON
+
+
+def test_trace_session_replay_stage_poisson_arrival_requires_session_rate() -> None:
+    with pytest.raises(ValueError, match="session_arrival 'poisson' requires session_rate"):
+        TraceSessionReplayLoadStage(concurrent_sessions=4, session_arrival=SessionArrival.POISSON)
 
 
 def test_trace_session_replay_stage_forbids_extra_fields() -> None:

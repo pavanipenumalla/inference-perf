@@ -261,6 +261,7 @@ The `load.trace_session_replay` section controls how sessions are executed. Unli
 | `concurrent_sessions` | integer | Yes | Max sessions running simultaneously. Set to `0` for unlimited (stress mode) |
 | `num_sessions` | integer | No | Total sessions to run in this stage. Omit to run all remaining sessions (entire corpus if single stage) |
 | `session_rate` | float | No | Optional rate limit for starting new sessions (sessions/sec) |
+| `session_arrival` | string | No | `constant` (default) spaces starts `1/session_rate` apart; `poisson` draws exponential gaps with that mean, seeded from `load.base_seed`. Requires `session_rate` |
 | `max_stage_duration` | float | No | Wall-clock cap in seconds on how long the stage may run. Omit to run until all sessions complete. See [Stage Timing](#stage-timing-max_stage_duration-and-stage_teardown_grace_seconds) below |
 | `duration` | float | No | Planned stage length in seconds. The stage stops dispatching once reached and reports `COMPLETED`. See [Bounding a stage by time](#bounding-a-stage-by-time) |
 

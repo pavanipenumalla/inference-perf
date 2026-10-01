@@ -33,6 +33,13 @@ class LoadType(Enum):
     TRACE_SESSION_REPLAY = "trace_session_replay"
 
 
+class SessionArrival(str, Enum):
+    """How session starts are spaced on a trace_session_replay stage with session_rate."""
+
+    CONSTANT = "constant"
+    POISSON = "poisson"
+
+
 class LoadStage(StrictBaseModel):
     """Base class for load stages. Use specific subclasses for different load types."""
 
@@ -105,6 +112,16 @@ class TraceSessionReplayLoadStage(LoadStage):
         gt=0,
         description="Sessions to start per second (optional, omit for no rate limit)",
     )
+    session_arrival: SessionArrival = Field(
+        SessionArrival.CONSTANT,
+        description=(
+            "How session starts are spaced at session_rate. 'constant' starts one every "
+            "1/session_rate seconds. 'poisson' draws each gap from an exponential "
+            "distribution with mean 1/session_rate, seeded from load.base_seed and the "
+            "stage index, so arrival times repeat across runs with the same seed. "
+            "'poisson' requires session_rate."
+        ),
+    )
     num_sessions: Optional[int] = Field(
         None,
         gt=0,
@@ -172,6 +189,9 @@ class TraceSessionReplayLoadStage(LoadStage):
                     f"concurrent_sessions ({self.concurrent_sessions}). "
                     f"You can't start sessions faster than the concurrency limit allows."
                 )
+
+        if self.session_arrival == SessionArrival.POISSON and self.session_rate is None:
+            raise ValueError("session_arrival 'poisson' requires session_rate: it sets the mean gap between starts.")
 
         if self.timeout is not None:
             logger.warning("load.stages[].timeout is deprecated; use max_stage_duration instead.")

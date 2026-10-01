@@ -16,7 +16,7 @@ from inference_perf.client.server_metrics.base import StageRuntimeInfo, StageSta
 from inference_perf.datagen.base import BaseGenerator
 from inference_perf.utils.trace_reader import AzurePublicDatasetReader
 from inference_perf.utils.request_queue import RequestQueue
-from .load_timer import LoadTimer, ConstantLoadTimer, PoissonLoadTimer, TraceReplayLoadTimer
+from .load_timer import LoadTimer, ConstantLoadTimer, PoissonLoadTimer, TraceReplayLoadTimer, session_start_gaps
 from inference_perf.datagen import DataGenerator, SessionGenerator, LazyLoadDataMixin
 from inference_perf.apis import InferenceAPIData
 from inference_perf.apis.user_session import LocalUserSession
@@ -696,6 +696,12 @@ class LoadGenerator:
         # Session pool management
         concurrent_sessions = stage.concurrent_sessions
         session_rate = stage.session_rate
+        # Seeded per stage so arrival times repeat across runs and differ between stages.
+        start_gaps = (
+            session_start_gaps(session_rate, stage.session_arrival, [self.base_seed, stage_id])
+            if session_rate is not None
+            else None
+        )
 
         max_stage_duration = (
             stage.max_stage_duration if stage.max_stage_duration else stage.timeout
@@ -887,9 +893,8 @@ class LoadGenerator:
             # Update timing for rate limiting
             now = time.perf_counter()
             last_dispatch_time = now
-            if session_rate is not None:
-                session_interval = 1.0 / session_rate
-                next_dispatch_time = max(next_dispatch_time + session_interval, now)
+            if start_gaps is not None:
+                next_dispatch_time = max(next_dispatch_time + next(start_gaps), now)
 
             logger.debug(f"Dispatched {dispatched_count} events for session {session_idx}")
             return dispatched_count

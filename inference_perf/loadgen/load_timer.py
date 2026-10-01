@@ -13,10 +13,21 @@
 # limitations under the License.
 import time
 from abc import ABC, abstractmethod
-from typing import Generator, Optional, Tuple
+from typing import Generator, Optional, Sequence, Tuple
 import numpy as np
+from inference_perf.config import SessionArrival
 from inference_perf.utils.trace_reader import TraceReader
 from pathlib import Path
+
+
+def session_start_gaps(rate: float, arrival: SessionArrival, seed: Sequence[int]) -> Generator[float, None, None]:
+    """Yield seconds between consecutive session starts at mean `rate` per second."""
+    if arrival == SessionArrival.CONSTANT:
+        while True:
+            yield 1.0 / rate
+    rng = np.random.default_rng(list(seed))
+    while True:
+        yield float(rng.exponential(1.0 / rate))
 
 
 class LoadTimer(ABC):
